@@ -1,0 +1,273 @@
+---
+title: "class13"
+author: "DAR, pID A69026881"
+format: pdf
+editor: source
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r}
+#BiocManager::install("DESeq2")
+#BiocManager::install("AnnotationDbi")
+library(BiocManager)
+library(DESeq2)
+library(ggplot2)
+library(DESeq2)
+citation("DESeq2")
+```
+
+```{r}
+counts <- read.csv("~/Downloads/Airway Scaled Counts.csv", row.names = 1)
+metadata <- read.csv("~/Downloads/Airway Metadata.csv")
+```
+
+```{r}
+head(counts)
+head(metadata)
+```
+
+Q1: How many genes are in this dataset?
+- 38,694 genes
+
+Q2: How many 'control' cell lines do we have?
+- 4 control cell lines
+
+
+I want to compare the control to the treated columns. To do this I will
+
+-Step 1, Identify and extract the "control" columns
+-Step 2: calculate the mean value per gene for all these "control" columns and save as 'control.mean'
+-Step 3: do the same for treated
+-Step 4: compare the 'control.mean' and 'treated.mean' values
+
+
+Step 1:
+```{r}
+control.inds <- metadata$dex=="control"
+metadata[control.inds,]
+head(counts[,control.inds])
+control.mean <- rowMeans(counts[,control.inds])
+head(control.mean)
+```
+
+
+Step 2: 
+```{r}
+treated.inds <- metadata$dex=="treated"
+metadata[treated.inds,]
+head(counts[,treated.inds])
+treated.mean <- rowMeans(counts[,treated.inds])
+head(treated.mean)
+
+```
+
+Q3: How would you make the above code in either approach more robust? Is there a function that could help here?
+- the apply function
+
+```{r}
+meancounts <- data.frame(control.mean, treated.mean)
+```
+
+
+Q5: create a scatter plot
+Q5b: make it in ggplot
+  - using geom_point()
+
+```{r}
+
+plot(meancounts)
+
+#in ggploot
+ggplot(meancounts, aes(control.mean, treated.mean)) + 
+  geom_point(alpha=0.2)
+```
+Q6: Try plotting both axis on a log scale, What is the argument to plot() that allows you to do this?
+  - log="xy"
+  
+  
+```{r}
+plot(meancounts, log="xy")
+
+#in ggplot 
+meancounts <- data.frame(control.mean, treated.mean)
+plot(meancounts)
+ggplot(meancounts, aes(control.mean, treated.mean)) + 
+  geom_point(alpha=0.2) + 
+  scale_x_continuous(trans="log2") +
+  scale_y_continuous(trans="log2")
+  
+```
+  
+  
+Logs are super useful when we have such skewed data
+  
+```{r}
+# Treated / control
+log2(10/10)
+log2(20/10)
+log2(5/10)
+```
+
+```{r}
+#new column with log2(fold change)
+meancounts$log2fc <- log2(meancounts[,"treated.mean"]/meancounts[,"control.mean"])
+head(meancounts)
+```
+
+```{r}
+head(meancounts[,1:2]==0)
+head(rowSums(meancounts[,1:2]==0)>0)
+to.rm.inds <- rowSums(meancounts[,1:2]==0)>0
+#shows you ones that are not 0's
+head(meancounts[!to.rm.inds, ])
+mycounts <- meancounts[!to.rm.inds,]
+
+#...or you can do it this way
+zero.vals <- which(meancounts[,1:2]==0, arr.ind = TRUE)
+
+to.rm <- unique(zero.vals[,1])
+mycounts <- meancounts[-to.rm,]
+head(mycounts)
+```
+
+
+Q. How many genes to I have left?
+```{r}
+nrow(mycounts)
+```
+
+```{r}
+up.ind <- sum(mycounts$log2fc > +2)
+up.ind
+down.ind <- sum(mycounts$log2fc < (-2))
+down.ind
+```
+
+
+Q8: Using the 'up.ind' vector above, can you determine how many upregulated genes we have at greater than 2fc level?
+  - 250
+
+
+Q9: Using the 'down.ind' vector above, can you determine how many downregulated genes we have at greater than 2fc level?
+  - 367
+
+Q10: Do you trust these results? Why?
+  - Not yet, because the differences might not be significant.
+  
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = counts, 
+                              colData = metadata, 
+                              design = ~dex)
+
+dds <- DESeq(dds)
+
+```
+
+To get the results out of this 'dds' object, we can use the DESeq 'results()' function. 
+
+```{r}
+res <- results(dds)
+head(res)
+```
+
+
+A common summary visualization is called a Volcano plot:
+
+
+```{r}
+mycols <- rep("gray", nrow(res))
+mycols[ res$log2FoldChange >2 ] <- "black" 
+mycols[ res$log2FoldChange < -2 ] <- "black" 
+mycols[ res$padj > 0.05] <- "red"
+```
+
+```{r}
+plot(res$log2FoldChange, -log(res$padj), col=mycols, 
+     xlab="Log2 Fold-Change", ylab="log P-value")
+abline(v=c(-2,2), col="red")
+abline(h=-log(0.05), col="blue")
+```
+
+
+
+# save our results to date
+```{r}
+write.csv(res, file="myresults.csv")
+```
+
+#adding annotation data
+
+We need to translate or "map" our ensemble IDs into more understandable gene names and the identifiers that other useful databases use.
+
+
+```{r}
+library("org.Hs.eg.db")
+library(AnnotationDbi)
+
+library(pathview)
+library(gage)
+library(gageData)
+
+data(kegg.sets.hs)
+
+# Examine the first 2 pathways in this kegg set for humans
+head(kegg.sets.hs, 2)
+```
+```{r}
+columns(org.Hs.eg.db)
+
+res$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res), #our genenames
+                     keytype="ENSEMBL",  
+                     column="SYMBOL",
+                     multiVals="first")
+
+
+res$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res), #our genenames
+                     keytype="ENSEMBL",  
+                     column="ENTREZID",
+                     multiVals="first")
+
+res$uniprot <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res), #our genenames
+                     keytype="ENSEMBL",  
+                     column="UNIPROT",
+                     multiVals="first")
+
+res$genename <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res), #our genenames
+                     keytype="ENSEMBL",  
+                     column="GENENAME",
+                     multiVals="first")
+```
+
+```{r}
+data("kegg.sets.hs")
+head(kegg.sets.hs,2)
+
+foldchanges = res$log2FoldChange
+names(foldchanges) = res$entrez
+head(foldchanges)
+
+keggres = gage(foldchanges, gsets=kegg.sets.hs)
+attributes(keggres)
+head(keggres$less, 3)
+
+pathview(gene.data = foldchanges, pathway.id = "hsa05310")
+```
+
+![](hsa05310.pathview.png)
+
+```{r}
+vsd <- vst(dds,blind=FALSE)
+plotPCA(vsd, intgroup=c("dex"))
+```
+
+```{r}
+#plotting with ggplot2 from scratch
+pcaData <- plotPCA(vsd, intgroup=c("dex")) 
+```
+
